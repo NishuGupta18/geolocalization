@@ -1,0 +1,10 @@
+# Local image dataset and generated image-analysis artifacts
+/images/*
+!/images/metadata.csv
+
+# Generated pipeline diagnostics
+/pipeline/outputs/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
