@@ -1,0 +1,60 @@
+{
+  "source_file": "532d401b7c144eb285a06fdd005ca053.png",
+  "source_sha256": "dc28ab12a93326ba3dfb91d3f2b2074527db2007809519aab9dfe5a2670b2b5e",
+  "source_format": "PNG",
+  "source_dimensions": [
+    320,
+    256
+  ],
+  "source_channels": 1,
+  "source_dtype": "uint16",
+  "source_pixel_range": [
+    20395,
+    21704
+  ],
+  "source_embedded_png_metadata": {},
+  "external_metadata_row": {
+    "filename": "532d401b7c144eb285a06fdd005ca053.png",
+    "lat_sc": "19.128109",
+    "lon_sc": "73.087578",
+    "lat_gtruth": "19.128109",
+    "lon_gtruth": "73.087578",
+    "alt": "109.099998",
+    "alt_takeoff_pt_dem": "4",
+    "yaw": "352.379661",
+    "pitch": "345.504168",
+    "roll": "353.410985",
+    "cam_fx": "200.2749481",
+    "cam_fy": "200.2043304",
+    "cam_cx": "158.8835449",
+    "cam_cy": "131.6855774",
+    "cam_k1": "-0.256979108",
+    "cam_k2": "0.048323553",
+    "cam_k3": "0",
+    "cam_p1": "0.00012196",
+    "cam_p2": "0.001473685"
+  },
+  "output_file": "532d401b7c144eb285a06fdd005ca053__contrast_denoise.png",
+  "output_dtype": "uint8",
+  "output_role": "display-only visualization",
+  "method": "contrast_denoise",
+  "parameters": {
+    "mapping_percentiles": [
+      1,
+      99
+    ],
+    "mapping_bounds_for_percentile_methods": [
+      20561.0,
+      21407.0
+    ],
+    "clahe": null,
+    "bilateral": {
+      "d": 5,
+      "sigmaColor": 12,
+      "sigmaSpace": 3,
+      "input": "1\u201399% 8-bit display mapping"
+    },
+    "unsharp": null
+  },
+  "calibration_note": "The metadata CSV provides navigation and visible-camera intrinsics/distortion, but no thermal calibration coefficients, temperature scale, emissivity, or NoData declaration."
+}
