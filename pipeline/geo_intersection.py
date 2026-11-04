@@ -302,6 +302,59 @@ def dense_ground_map(h: int, w: int,
     return lats.reshape(h, w), lons.reshape(h, w)
 
 
+def orthorectify_image(img_ud: np.ndarray, K: np.ndarray,
+                       R_world_cam: np.ndarray, cam_height_m: float) -> np.ndarray:
+    """Resample an undistorted frame onto a north-up, flat-ground pixel grid.
+
+    Output pixels retain the source dtype (including uint16 thermal values).
+    The grid uses the approximate nadir ground-sampling distance.
+    """
+    h, w = img_ud.shape[:2]
+    corner_uv = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
+                         dtype=np.float64)
+    corner_ned, valid = flat_ground_intersection(corner_uv, K, R_world_cam, cam_height_m)
+    if not np.all(valid):
+        raise ValueError("At least one image corner ray does not intersect the flat ground")
+
+    north_min, north_max = float(corner_ned[:, 0].min()), float(corner_ned[:, 0].max())
+    east_min, east_max = float(corner_ned[:, 1].min()), float(corner_ned[:, 1].max())
+    gsd = cam_height_m / float(np.sqrt(K[0, 0] * K[1, 1]))
+    out_w = max(1, int(np.ceil((east_max - east_min) / gsd)) + 1)
+    out_h = max(1, int(np.ceil((north_max - north_min) / gsd)) + 1)
+
+    east = east_min + np.arange(out_w, dtype=np.float64) * gsd
+    north = north_max - np.arange(out_h, dtype=np.float64) * gsd
+    east_grid, north_grid = np.meshgrid(east, north)
+    # Camera-relative NED coordinates; camera is at (0, 0, -height).
+    ground_to_camera = np.stack((north_grid, east_grid,
+                                 np.full_like(north_grid, cam_height_m)), axis=-1) @ R_world_cam
+    z = ground_to_camera[..., 2]
+    safe_z = np.where(z > 1e-8, z, np.nan)
+    map_x = (K[0, 0] * ground_to_camera[..., 0] / safe_z + K[0, 2]).astype(np.float32)
+    map_y = (K[1, 1] * ground_to_camera[..., 1] / safe_z + K[1, 2]).astype(np.float32)
+    invalid_map = (
+        ~np.isfinite(map_x) | ~np.isfinite(map_y) | (z <= 1e-8)
+        | (map_x < 0) | (map_x > w - 1)
+        | (map_y < 0) | (map_y > h - 1)
+    )
+    map_x[invalid_map] = -1
+    map_y[invalid_map] = -1
+    topdown = cv2.remap(img_ud, map_x, map_y, cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    # Preserve 16-bit precision while spreading the valid thermal footprint
+    # over the image display range. Zero remains the no-data value. This is a
+    # monotonic tone mapping, not a conversion to 8-bit.
+    if topdown.dtype == np.uint16:
+        valid_pixels = topdown > 0
+        if np.any(valid_pixels):
+            values = topdown[valid_pixels].astype(np.float64)
+            low, high = float(values.min()), float(values.max())
+            if high > low:
+                stretched = np.rint(1 + (values - low) * (65534.0 / (high - low)))
+                topdown[valid_pixels] = np.clip(stretched, 1, 65535).astype(np.uint16)
+    return topdown
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Visualisation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -428,7 +481,9 @@ def check_ray_directions(K: np.ndarray, R_world_cam: np.ndarray,
 def process(filename: str,
             images_dir=None,
             metadata_csv=None,
-            out_base_dir=None):
+            out_base_dir=None,
+            save_diagnostics=True,
+            undistorted=None):
     """Run the full flat-ground intersection pipeline for one image.
 
     Returns a dict with:
@@ -443,8 +498,11 @@ def process(filename: str,
     meta = pd.read_csv(metadata_csv).set_index("filename")
     r    = meta.loc[filename]
 
-    # ── 2. Undistort ─────────────────────────────────────────────────────────
-    img_ud, K_orig, newK, D = undistort(filename, images_dir, metadata_csv)
+    # ── 2. Use the undistorted frame (or undistort it here for standalone use)
+    if undistorted is None:
+        img_ud, K_orig, newK, D = undistort(filename, images_dir, metadata_csv)
+    else:
+        img_ud, K_orig, newK, D = undistorted
     h, w = img_ud.shape[:2]
     print(f"[undistort] {filename}  shape={img_ud.shape}  dtype={img_ud.dtype}")
     print(f"  K_orig:\n{K_orig}")
@@ -503,13 +561,22 @@ def process(filename: str,
     nadir_lat, nadir_lon = camera_nadir_latlon(float(r.lat_sc), float(r.lon_sc))
     print(f"\n  Camera nadir (GPS): lat={nadir_lat:.6f}  lon={nadir_lon:.6f}")
 
-    # ── 8. Visualise ─────────────────────────────────────────────────────────
+    # ── 8. Orthorectify and save the thermal image ───────────────────────────
     stem    = Path(filename).stem
-    out_dir = out_base_dir / stem
-    check_ray_directions(newK, R_world_cam, h, w, out_dir, stem)
-    visualise(filename, img_ud, lat_map, lon_map, footprint, r, out_dir)
+    topdown = orthorectify_image(img_ud, newK, R_world_cam, cam_height_m)
+    topdown_path = out_base_dir / f"{stem}_topdown.png"
+    out_base_dir.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(topdown_path), topdown):
+        raise OSError(f"Could not write orthorectified image: {topdown_path}")
 
-    return dict(img_ud=img_ud, K=K_orig, newK=newK, D=D,
+    # Diagnostic plots are optional so the batch folder can contain only images.
+    if save_diagnostics:
+        out_dir = out_base_dir / stem
+        check_ray_directions(newK, R_world_cam, h, w, out_dir, stem)
+        visualise(filename, img_ud, lat_map, lon_map, footprint, r, out_dir)
+
+    return dict(img_ud=img_ud, topdown=topdown, topdown_path=topdown_path,
+                K=K_orig, newK=newK, D=D,
                 R_world_cam=R_world_cam,
                 footprint=footprint,
                 lat_map=lat_map, lon_map=lon_map,
@@ -533,14 +600,18 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir",      default=None)
     parser.add_argument("--all", action="store_true",
                         help="Process all 500 images (batch mode)")
+    parser.add_argument("--no-diagnostics", action="store_true",
+                        help="Save only the orthorectified image")
     args = parser.parse_args()
 
     if args.all:
         meta = pd.read_csv(args.metadata_csv or METADATA_CSV)
         for fn in meta["filename"]:
             try:
-                process(fn, args.images_dir, args.metadata_csv, args.out_dir)
+                process(fn, args.images_dir, args.metadata_csv, args.out_dir,
+                        save_diagnostics=not args.no_diagnostics)
             except Exception as e:
                 print(f"  ERROR {fn}: {e}")
     else:
-        process(args.filename, args.images_dir, args.metadata_csv, args.out_dir)
+        process(args.filename, args.images_dir, args.metadata_csv, args.out_dir,
+                save_diagnostics=not args.no_diagnostics)
