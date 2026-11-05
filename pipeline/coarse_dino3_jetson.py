@@ -157,7 +157,7 @@ def retrieve_topk(
     query_path: Path,
     index_path: Path,
     model_name: str,
-    topk: int = 20,
+    topk: int = 30,
     batch_size: int = 8,
     use_half: bool = False,
 ) -> List[dict]:
