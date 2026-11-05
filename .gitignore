@@ -1,0 +1,14 @@
+# Local image dataset and generated image-analysis artifacts
+/images/*
+!/images/metadata.csv
+
+# Generated pipeline diagnostics
+# /pipeline/outputs/
+/pipeline/outputs/
+
+# Downloaded satellite tile data
+/satellite_tile/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
